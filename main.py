@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo import MongoClient
-from passlib.hash import bcrypt
+import bcrypt
 from datetime import datetime
 import io
 from garbage_classifier import classify_image_from_stream
@@ -14,6 +14,7 @@ from garbage_classifier import classify_image_from_stream
 client = MongoClient(
     # "mongodb://localhost:27017/"  # Cambia esto si tu MongoDB está en otro host/puerto
     "mongodb+srv://Jaco:505@reciclajedb.tvx4n5b.mongodb.net/?retryWrites=true&w=majority&appName=ReciclajeDB"
+    # "mongodb+srv://dr8007942_db_user:53Nw0jv4qqkvEOil@greenscanner.qqwcxk9.mongodb.net/?retryWrites=true&w=majority&appName=greenscanner"
 )
 db = client["reciclaje"]
 
@@ -32,8 +33,7 @@ app.add_middleware(
         "http://192.168.20.23:5501",
         "http://10.0.2.2:5500",
         "127.0.0.1:52731",
-        "https://green-scanner.vercel.app",
-        "https://gs.kwb.com.co"
+        "https://greenscanner.vercel.app/",
     ],
     allow_credentials=True,  # pon False si no usas cookies/sesiones
     allow_methods=["*"],
@@ -58,6 +58,9 @@ class Puntos(BaseModel):
 class Canje(BaseModel):
     correo: str
     premio: str
+
+class ClasificacionRequest(BaseModel):
+    correo: str
 
 
 # ================== Utils ==============================
@@ -99,7 +102,7 @@ def puntos_acumulados_usuario(correo: str):
 @app.post("/login")
 def login(user: Login):
     db_user = get_user(user.correo)
-    if not db_user or not bcrypt.verify(user.password, db_user["password"]):
+    if not db_user or not bcrypt.checkpw(user.password.encode('utf-8'), db_user["password"]):
         return {"error": "Credenciales incorrectas"}
     return {
         "mensaje": "Login exitoso",
@@ -113,7 +116,7 @@ def login(user: Login):
 def register(user: User):
     if get_user(user.correo):
         return {"error": "Usuario ya registrado"}
-    hashed = bcrypt.hash(user.password)
+    hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
     db.usuarios.insert_one(
         {
             "nombre": user.nombre,
@@ -217,12 +220,59 @@ async def classify(file: UploadFile = File(...)):
         # Classify the image from the stream
         result = classify_image_from_stream(io.BytesIO(image_stream))
 
-        # Aquí puedes agregar lógica para dar puntos, etc.
-        # Por ahora, solo devolvemos el resultado de la clasificación.
+        # Guardar la clasificación en la base de datos
+        clasificacion_data = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "resultado": result,
+            "fecha": datetime.utcnow(),
+            "size": file.size if hasattr(file, 'size') else len(image_stream)
+        }
+        
+        # Insertar en la colección clasificaciones
+        db.clasificaciones.insert_one(clasificacion_data)
 
-        return result
+        return {
+            "mensaje": "Clasificación exitosa",
+            "resultado": result,
+            "filename": file.filename,
+            "fecha": clasificacion_data["fecha"]
+        }
     except Exception as e:
         return {"error": str(e)}
+
+
+# -------- Obtener Clasificaciones ----------------------
+@app.get("/clasificaciones")
+def obtener_clasificaciones():
+    """Obtiene todas las clasificaciones realizadas"""
+    clasificaciones = list(db.clasificaciones.find({}, {"_id": 0}))
+    clasificaciones.sort(key=lambda x: x.get("fecha", datetime.min), reverse=True)
+    return {
+        "total": len(clasificaciones),
+        "clasificaciones": clasificaciones
+    }
+
+
+# -------- Obtener Clasificaciones con filtros ----------
+@app.get("/clasificaciones/filtradas")
+def obtener_clasificaciones_filtradas(limite: int = 10, categoria: str = None):
+    """Obtiene clasificaciones con filtros opcionales"""
+    filtro = {}
+    if categoria:
+        filtro["resultado.categoria"] = categoria
+    
+    clasificaciones = list(db.clasificaciones.find(filtro, {"_id": 0}).limit(limite))
+    clasificaciones.sort(key=lambda x: x.get("fecha", datetime.min), reverse=True)
+    
+    return {
+        "total": len(clasificaciones),
+        "filtros_aplicados": {
+            "limite": limite,
+            "categoria": categoria
+        },
+        "clasificaciones": clasificaciones
+    }
 
 if __name__ == "__main__":
     import uvicorn
