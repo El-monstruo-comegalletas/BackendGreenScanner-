@@ -98,19 +98,25 @@ def puntos_acumulados_usuario(correo: str):
         return {"error": "Usuario no encontrado"}
     return {"correo": correo, "puntos_acumulados": int_or_0(u, "puntos_acumulados")}
 
-
 # -------- Login ----------------------------------------
 @app.post("/login")
 def login(user: Login):
     db_user = get_user(user.correo)
-    if not db_user or not bcrypt.checkpw(user.password.encode('utf-8'), db_user["password"]):
+
+    if not db_user:
         return {"error": "Credenciales incorrectas"}
+
+    # Convertir el hash de la base de datos a bytes
+    stored_password = db_user["password"].encode("utf-8")
+
+    if not bcrypt.checkpw(user.password.encode("utf-8"), stored_password):
+        return {"error": "Credenciales incorrectas"}
+
     return {
         "mensaje": "Login exitoso",
         "puntos": int_or_0(db_user, "puntos"),
         "puntos_acumulados": int_or_0(db_user, "puntos_acumulados"),
     }
-
 
 # -------- Registro -------------------------------------
 @app.post("/register")
