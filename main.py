@@ -33,7 +33,8 @@ app.add_middleware(
         "http://192.168.20.23:5501",
         "http://10.0.2.2:5500",
         "127.0.0.1:52731",
-        "https://greenscanner.vercel.app/",
+        "https://greenscanner.vercel.app"
+        "https://green-scanner.vercel.app",
         "gs.kwb.com.co",
     ],
     allow_credentials=True,  # pon False si no usas cookies/sesiones
