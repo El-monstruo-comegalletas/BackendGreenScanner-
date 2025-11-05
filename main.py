@@ -13,7 +13,7 @@ from garbage_classifier import classify_image_from_stream
 # ================== Conexión a Mongo ===================
 client = MongoClient(
     # "mongodb://localhost:27017/"  # Cambia esto si tu MongoDB está en otro host/puerto
-    "mongodb+srv://Jaco:505@reciclajedb.tvx4n5b.mongodb.net/?retryWrites=true&w=majority&appName=ReciclajeDB"
+    "mongodb+srv://Jaco:505@reciclajedb.tvx4n5b.mongodb.net/?appName=ReciclajeDB"
     # "mongodb+srv://dr8007942_db_user:53Nw0jv4qqkvEOil@greenscanner.qqwcxk9.mongodb.net/?retryWrites=true&w=majority&appName=greenscanner"
 )
 db = client["reciclaje"]
@@ -130,15 +130,26 @@ def register(user: User):
     return {"mensaje": "Usuario registrado"}
 
 
+
 # -------- Sumar puntos (escáner / voz) -----------------
 @app.post("/puntos/agregar")
 def agregar_puntos(puntos: Puntos):
-    # Suma al saldo y al acumulado
+
+    # --- CORRECCIÓN ---
+    # 1. Verificar que el usuario existe
+    usuario_existente = get_user(puntos.correo)
+    if not usuario_existente:
+        return {"error": "Usuario no encontrado, no se pueden sumar puntos"}
+    # --- FIN DE LA CORRECCIÓN ---
+
+    # 2. Suma al saldo y al acumulado (ahora sabemos que existe)
     db.usuarios.update_one(
         {"correo": puntos.correo},
         {"$inc": {"puntos": puntos.puntos, "puntos_acumulados": puntos.puntos}},
-        upsert=False,
+        # upsert=False (está bien dejarlo, aunque ya no es crítico)
     )
+
+    # 3. Guardar historial
     db.historial.insert_one(
         {
             "usuario": puntos.correo,
@@ -147,7 +158,14 @@ def agregar_puntos(puntos: Puntos):
             "fecha": datetime.utcnow(),
         }
     )
-    nuevo = get_user(puntos.correo)
+
+    # 4. Devolver los nuevos totales (re-usamos la variable)
+    #    OJO: get_user() es otra llamada a la DB. Es mejor usar los datos que ya tenemos
+    #    y sumarles los puntos, o simplemente llamar a get_user() de nuevo.
+    #    Llamar de nuevo es más simple y asegura consistencia:
+    
+    nuevo = get_user(puntos.correo) # Llamamos de nuevo para obtener los datos frescos
+    
     return {
         "mensaje": "Puntos agregados",
         "puntos": int_or_0(nuevo, "puntos"),
@@ -207,7 +225,21 @@ def canjear_premio(data: Canje):
 @app.get("/historial/{correo}")
 def ver_historial(correo: str):
     historial = list(db.historial.find({"usuario": correo}, {"_id": 0}))
-    historial.sort(key=lambda x: x.get("fecha", datetime.min), reverse=True)
+
+    # --- CORRECCIÓN ---
+    # Usamos una función de ordenamiento más segura
+    # para evitar errores si una 'fecha' es None o no es un datetime.
+    def get_safe_date(item):
+        fecha_item = item.get("fecha")
+        if isinstance(fecha_item, datetime):
+            return fecha_item
+        # Si 'fecha' es None, o un string, o cualquier otra cosa,
+        # lo tratamos como el más antiguo (datetime.min).
+        return datetime.min
+
+    historial.sort(key=get_safe_date, reverse=True)
+    # --- FIN DE LA CORRECCIÓN ---
+
     return historial
 
 
