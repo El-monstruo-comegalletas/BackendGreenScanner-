@@ -9,6 +9,72 @@ from garbage_classifier import classify_image_from_stream
 
 #mongodb://localhost:27017/
 #Jaco:505
+# main.py - Inserta esto después de las importaciones
+# ...
+from datetime import datetime
+import io
+from garbage_classifier import classify_image_from_stream
+
+# ================== Diccionario de Mapeo de Reciclaje ===================
+RECYCLING_MAP = {
+    # El modelo de IA "yangy50/garbage-classification" devuelve nombres en inglés.
+    # Mapeamos esas clases a información de reciclaje en español.
+    
+    # Materiales Aprovechables (Contenedor Azul/Verde en tu sistema)
+    "cardboard": {
+        "material": "Cartón", 
+        "categoria": "Papel/Cartón", 
+        "color": "Azul", 
+        "puntos": 5, 
+        "instrucciones": "Doblar y compactar. Debe estar limpio y seco. Sin residuos de comida."
+    },
+    "paper": {
+        "material": "Papel", 
+        "categoria": "Papel/Cartón", 
+        "color": "Azul", 
+        "puntos": 5, 
+        "instrucciones": "No arrugar demasiado. Evita papel mojado o sucio. Sin papel de cocina."
+    },
+    "plastic": {
+        "material": "Plástico", 
+        "categoria": "Plástico", 
+        "color": "Azul", 
+        "puntos": 10, 
+        "instrucciones": "Lavar, retirar tapas y etiquetas. Compactar la botella para ahorrar espacio."
+    },
+    "metal": {
+        "material": "Metal (Lata)", 
+        "categoria": "Metal", 
+        "color": "Azul", 
+        "puntos": 15, 
+        "instrucciones": "Lavar y aplastar si es posible. No reciclar aerosoles presurizados."
+    },
+    "glass": {
+        "material": "Vidrio", 
+        "categoria": "Vidrio", 
+        "color": "Verde", 
+        "puntos": 5, 
+        "instrucciones": "Lavar. No reciclar cerámica, bombillas, ni vidrios rotos de ventanas."
+    },
+
+    # Materiales No Reciclables (Contenedor Gris/Negro)
+    "trash": {
+        "material": "Residuo Genérico", 
+        "categoria": "No Reciclable", 
+        "color": "Gris/Negro", 
+        "puntos": 0, 
+        "instrucciones": "Desechar como residuo ordinario. No debe ir en botes de reciclaje."
+    },
+    # Fallback para cualquier clase no reconocida por el modelo
+    "other": {
+        "material": "Elemento Desconocido", 
+        "categoria": "No Reciclable", 
+        "color": "Gris/Negro", 
+        "puntos": 0, 
+        "instrucciones": "Desechar como residuo ordinario o reintentar el escaneo desde otro ángulo."
+    }
+}
+# ===================================================================================
 
 # ================== Conexión a Mongo ===================
 client = MongoClient(
@@ -244,35 +310,81 @@ def ver_historial(correo: str):
 
 
 # -------- Garbage Classification -----------------------
-@app.post("/classify")
-async def classify(file: UploadFile = File(...)):
+# main.py - REEMPLAZA tu función @app.post("/classify") existente con esta
+# ...
+
+# ----------------- Clasificación de Imagen ---------------------
+class ClasificacionResponse(BaseModel):
+    mensaje: str
+    resultado: dict
+    puntos_ganados: int
+    filename: str
+    fecha: str
+
+
+@app.post("/classify", response_model=ClasificacionResponse)
+def classify_image_endpoint(
+    file: UploadFile = File(...),
+    correo: str = Form(...)
+):
+    """
+    Recibe una imagen, la clasifica con el modelo y registra la transacción
+    en la base de datos, actualizando los puntos del usuario.
+    """
     try:
-        # Read the image from the upload
-        image_stream = await file.read()
+        # 1. Leer el contenido del archivo
+        file_content = file.file.read()
 
-        # Classify the image from the stream
-        result = classify_image_from_stream(io.BytesIO(image_stream))
+        # 2. Clasificar la imagen con el modelo de IA
+        # El resultado es un diccionario con la clave 'predicted_class' (ej: 'plastic')
+        result = classify_image_from_stream(io.BytesIO(file_content))
 
-        # Guardar la clasificación en la base de datos
+        if "error" in result:
+            return {"error": f"Error en el clasificador de IA: {result['error']}"}
+        
+        # Obtener la clase predicha, usar "other" como fallback
+        predicted_class = result.get("predicted_class", "other").lower()
+
+        # 3. APLICAR EL MAPEO DE RECICLAJE (¡NUEVA LÓGICA!)
+        # Si la clase predicha no está en nuestro mapa, se usará la info de "other"
+        recycling_info = RECYCLING_MAP.get(predicted_class, RECYCLING_MAP["other"])
+        
+        puntos_ganados = recycling_info["puntos"]
+        mensaje_puntos = f"+{puntos_ganados} puntos por reciclaje de {recycling_info['material']}"
+        
+        # 4. Actualizar puntos del usuario en MongoDB
+        if puntos_ganados > 0:
+            db.usuarios.update_one(
+                {"correo": correo},
+                {"$inc": {"puntos": puntos_ganados}}
+            )
+
+        # 5. Preparar y guardar el registro para el historial
         clasificacion_data = {
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "resultado": result,
-            "fecha": datetime.utcnow(),
-            "size": file.size if hasattr(file, 'size') else len(image_stream)
+            "correo": correo,
+            "fecha": datetime.now().isoformat(),
+            "puntos_ganados": puntos_ganados,
+            "accion": "escaneo",
+            "detalle": mensaje_puntos,
+            "resultado": recycling_info # <-- Guardamos la info de reciclaje mapeada
         }
         
-        # Insertar en la colección clasificaciones
         db.clasificaciones.insert_one(clasificacion_data)
 
+        # 6. Devolver la respuesta completa al frontend
         return {
             "mensaje": "Clasificación exitosa",
-            "resultado": result,
+            "resultado": recycling_info, # <-- Devolvemos la información completa de reciclaje
+            "puntos_ganados": puntos_ganados,
             "filename": file.filename,
             "fecha": clasificacion_data["fecha"]
         }
     except Exception as e:
-        return {"error": str(e)}
+        # Este es un error general del endpoint
+        return {"error": f"Error general al procesar la clasificación: {str(e)}"}
+
+
+# ... [El resto de tus rutas de API: login, register, obtener_historial_usuario, etc.]
 
 
 # -------- Obtener Clasificaciones ----------------------
