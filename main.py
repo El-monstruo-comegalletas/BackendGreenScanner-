@@ -196,7 +196,7 @@ def login(user: Login):
     # El hash de la base de datos ya está en bytes
     stored_password = db_user["password"]
 
-    if user.password != stored_password:
+    if not bcrypt.checkpw(user.password.encode("utf-8"), stored_password):
         return {"error": "Credenciales incorrectas"}
 
     return {
@@ -206,26 +206,22 @@ def login(user: Login):
     }
 
 # -------- Registro -------------------------------------
-# -------- Registro -------------------------------------
 @app.post("/register")
 def register(user: User):
     if get_user(user.correo):
         return {"error": "Usuario ya registrado"}
-    
-    # --- ¡ESTO SÍ VA! ---
-    # Codificamos la contraseña a bytes, la hasheamos, y guardamos el hash (que son bytes)
     hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
-    
     db.usuarios.insert_one(
         {
             "nombre": user.nombre,
             "correo": user.correo,
-            "password": hashed, # <-- Guardamos el HASH (bytes)
-            "puntos": 0,
-            "puntos_acumulados": 0,
+            "password": hashed,
+            "puntos": 0,                # saldo actual
+            "puntos_acumulados": 0,     # acumulado de por vida
         }
     )
     return {"mensaje": "Usuario registrado"}
+
 
 
 # -------- Sumar puntos (escáner / voz) -----------------
