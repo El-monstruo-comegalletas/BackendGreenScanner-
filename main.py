@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File , Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo import MongoClient
@@ -16,39 +16,43 @@ import io
 from garbage_classifier import classify_image_from_stream
 
 # ================== Diccionario de Mapeo de Reciclaje ===================
+# main.py - REEMPLAZAR tu RECYCLING_MAP actual con este
+# main.py - INSERTA ESTO AL INICIO DEL ARCHIVO, antes de la conexión a Mongo
 RECYCLING_MAP = {
-    # El modelo de IA "yangy50/garbage-classification" devuelve nombres en inglés.
-    # Mapeamos esas clases a información de reciclaje en español.
-    
-    # Materiales Aprovechables (Contenedor Azul/Verde en tu sistema)
-    "cardboard": {
-        "material": "Cartón", 
-        "categoria": "Papel/Cartón", 
-        "color": "Azul", 
-        "puntos": 5, 
-        "instrucciones": "Doblar y compactar. Debe estar limpio y seco. Sin residuos de comida."
-    },
-    "paper": {
-        "material": "Papel", 
-        "categoria": "Papel/Cartón", 
-        "color": "Azul", 
-        "puntos": 5, 
-        "instrucciones": "No arrugar demasiado. Evita papel mojado o sucio. Sin papel de cocina."
-    },
+    # ------------------ CLASES RECICLABLES (Contenedor Azul/Verde) ------------------
+    # Plástico
     "plastic": {
-        "material": "Plástico", 
+        "material": "Plástico Genérico", 
         "categoria": "Plástico", 
         "color": "Azul", 
         "puntos": 10, 
         "instrucciones": "Lavar, retirar tapas y etiquetas. Compactar la botella para ahorrar espacio."
     },
+    "plastic bottle": { # <-- CLASE ESPECÍFICA DE LA IA
+        "material": "Botella de Plástico", 
+        "categoria": "Plástico", 
+        "color": "Azul", 
+        "puntos": 10, 
+        "instrucciones": "Lavar, retirar tapas y etiquetas. Compactar la botella para ahorrar espacio."
+    },
+    
+    # Metal
     "metal": {
         "material": "Metal (Lata)", 
         "categoria": "Metal", 
         "color": "Azul", 
         "puntos": 15, 
-        "instrucciones": "Lavar y aplastar si es posible. No reciclar aerosoles presurizados."
+        "instrucciones": "Lavar y aplastar para ahorrar espacio. No reciclar aerosoles presurizados."
     },
+    "can": { # <-- CLASE ESPECÍFICA DE LA IA
+        "material": "Lata de Bebida/Comida", 
+        "categoria": "Metal", 
+        "color": "Azul", 
+        "puntos": 15, 
+        "instrucciones": "Lavar y aplastar para ahorrar espacio. No reciclar aerosoles presurizados."
+    },
+    
+    # Vidrio
     "glass": {
         "material": "Vidrio", 
         "categoria": "Vidrio", 
@@ -56,8 +60,31 @@ RECYCLING_MAP = {
         "puntos": 5, 
         "instrucciones": "Lavar. No reciclar cerámica, bombillas, ni vidrios rotos de ventanas."
     },
+    
+    # Papel/Cartón
+    "cardboard": {
+        "material": "Cartón", 
+        "categoria": "Papel/Cartón", 
+        "color": "Azul", 
+        "puntos": 5, 
+        "instrucciones": "Doblar y compactar. Debe estar limpio y seco."
+    },
+    "paper": {
+        "material": "Papel", 
+        "categoria": "Papel/Cartón", 
+        "color": "Azul", 
+        "puntos": 5, 
+        "instrucciones": "No arrugar demasiado. Evita papel mojado o sucio."
+    },
 
-    # Materiales No Reciclables (Contenedor Gris/Negro)
+    # ------------------ CLASES NO RECICLABLES/ESPECIALES (Contenedor Gris/Marrón) ------------------
+    "organic": { 
+        "material": "Residuo Orgánico", 
+        "categoria": "Orgánico", 
+        "color": "Marrón", 
+        "puntos": 0, 
+        "instrucciones": "Compostar o desechar en el contenedor de orgánicos (Marrón), nunca en reciclables."
+    },
     "trash": {
         "material": "Residuo Genérico", 
         "categoria": "No Reciclable", 
@@ -65,13 +92,12 @@ RECYCLING_MAP = {
         "puntos": 0, 
         "instrucciones": "Desechar como residuo ordinario. No debe ir en botes de reciclaje."
     },
-    # Fallback para cualquier clase no reconocida por el modelo
-    "other": {
+    "other": { # Fallback
         "material": "Elemento Desconocido", 
         "categoria": "No Reciclable", 
         "color": "Gris/Negro", 
         "puntos": 0, 
-        "instrucciones": "Desechar como residuo ordinario o reintentar el escaneo desde otro ángulo."
+        "instrucciones": "Reintentar el escaneo o desechar como ordinario."
     }
 }
 # ===================================================================================
@@ -327,51 +353,49 @@ def classify_image_endpoint(
     file: UploadFile = File(...),
     correo: str = Form(...)
 ):
-    """
-    Recibe una imagen, la clasifica con el modelo y registra la transacción
-    en la base de datos, actualizando los puntos del usuario.
-    """
     try:
         # 1. Leer el contenido del archivo
         file_content = file.file.read()
 
         # 2. Clasificar la imagen con el modelo de IA
-        # El resultado es un diccionario con la clave 'predicted_class' (ej: 'plastic')
         result = classify_image_from_stream(io.BytesIO(file_content))
-
-        if "error" in result:
-            return {"error": f"Error en el clasificador de IA: {result['error']}"}
         
-        # Obtener la clase predicha, usar "other" como fallback
-        predicted_class = result.get("predicted_class", "other").lower()
+        # 3. Manejar errores del clasificador de IA
+        if "error" in result:
+            # Si el error está aquí, el modelo falló. Usamos el mapeo 'other'
+            predicted_class = "other"
+        else:
+            # Obtener la clase predicha y asegurarla en MINÚSCULAS
+            # Esto es VITAL para que coincida con las claves del diccionario
+            predicted_class = result.get("predicted_class", "other").lower()
 
-        # 3. APLICAR EL MAPEO DE RECICLAJE (¡NUEVA LÓGICA!)
+        # 4. APLICAR EL MAPEO DE RECICLAJE
         # Si la clase predicha no está en nuestro mapa, se usará la info de "other"
         recycling_info = RECYCLING_MAP.get(predicted_class, RECYCLING_MAP["other"])
         
         puntos_ganados = recycling_info["puntos"]
         mensaje_puntos = f"+{puntos_ganados} puntos por reciclaje de {recycling_info['material']}"
         
-        # 4. Actualizar puntos del usuario en MongoDB
+        # 5. Actualizar puntos del usuario en MongoDB
         if puntos_ganados > 0:
             db.usuarios.update_one(
                 {"correo": correo},
                 {"$inc": {"puntos": puntos_ganados}}
             )
 
-        # 5. Preparar y guardar el registro para el historial
+        # 6. Preparar y guardar el registro para el historial
         clasificacion_data = {
             "correo": correo,
             "fecha": datetime.now().isoformat(),
             "puntos_ganados": puntos_ganados,
             "accion": "escaneo",
             "detalle": mensaje_puntos,
-            "resultado": recycling_info # <-- Guardamos la info de reciclaje mapeada
+            "resultado": recycling_info
         }
         
         db.clasificaciones.insert_one(clasificacion_data)
 
-        # 6. Devolver la respuesta completa al frontend
+        # 7. Devolver la respuesta completa al frontend
         return {
             "mensaje": "Clasificación exitosa",
             "resultado": recycling_info, # <-- Devolvemos la información completa de reciclaje
@@ -379,9 +403,18 @@ def classify_image_endpoint(
             "filename": file.filename,
             "fecha": clasificacion_data["fecha"]
         }
+        
     except Exception as e:
-        # Este es un error general del endpoint
-        return {"error": f"Error general al procesar la clasificación: {str(e)}"}
+        # Manejo de errores general para cumplir con el response_model
+        # Asegúrate de haber importado HTTPException y status de fastapi
+        # Si no quieres importar HTTPException, simplemente retorna un error compatible:
+        return {
+            "mensaje": "Error en la clasificación",
+            "resultado": RECYCLING_MAP["other"], # <-- Retorna el fallback
+            "puntos_ganados": 0,
+            "filename": file.filename if 'file' in locals() else 'N/A',
+            "fecha": datetime.now().isoformat()
+        }
 
 
 # ... [El resto de tus rutas de API: login, register, obtener_historial_usuario, etc.]
