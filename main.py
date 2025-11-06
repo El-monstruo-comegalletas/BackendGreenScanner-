@@ -196,7 +196,7 @@ def login(user: Login):
     # El hash de la base de datos ya está en bytes
     stored_password = db_user["password"]
 
-    if not bcrypt.checkpw(user.password.encode("utf-8"), stored_password):
+    if user.password != stored_password:
         return {"error": "Credenciales incorrectas"}
 
     return {
