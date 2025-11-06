@@ -206,22 +206,26 @@ def login(user: Login):
     }
 
 # -------- Registro -------------------------------------
+# -------- Registro -------------------------------------
 @app.post("/register")
 def register(user: User):
     if get_user(user.correo):
         return {"error": "Usuario ya registrado"}
+    
+    # --- ¡ESTO SÍ VA! ---
+    # Codificamos la contraseña a bytes, la hasheamos, y guardamos el hash (que son bytes)
     hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
+    
     db.usuarios.insert_one(
         {
             "nombre": user.nombre,
             "correo": user.correo,
-            "password": hashed,
-            "puntos": 0,                # saldo actual
-            "puntos_acumulados": 0,     # acumulado de por vida
+            "password": hashed, # <-- Guardamos el HASH (bytes)
+            "puntos": 0,
+            "puntos_acumulados": 0,
         }
     )
     return {"mensaje": "Usuario registrado"}
-
 
 
 # -------- Sumar puntos (escáner / voz) -----------------
